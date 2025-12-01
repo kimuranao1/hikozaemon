@@ -28,7 +28,7 @@ function tokenize_chunk(chunk, maxTokenLen = 10) {
 
 // -------------------------
 // 対象トークン周辺だけ抽出（高速化）
-function extract_near_target(allTokens, targetTokens, windowSize = 2000) {
+function extract_near_target(allTokens, targetTokens, windowSize = 10) {
     const targetIndices = [];
     for (let i = 0; i < allTokens.length; i++) {
         if (targetTokens.has(allTokens[i])) targetIndices.push(i);
