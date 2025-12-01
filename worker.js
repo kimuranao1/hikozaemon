@@ -5874,7 +5874,7 @@ https://zisakuzienyurusumaji.hatenablog.com/entry/2025/11/30/163950
 
 
 
- `
+ `;
 })();
 
 sendLog('埋め込みテキスト長: ' + EMBED_TEXT.length);
