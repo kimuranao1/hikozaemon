@@ -160,8 +160,47 @@ document.getElementById("userInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") sendMessage();
 });
 
+
+function appendMessageStreaming(role) {
+    const div = document.createElement("div");
+    div.className = "message " + role;
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.innerText = "";
+
+    div.appendChild(bubble);
+    chatDiv.appendChild(div);
+    chatDiv.scrollTop = chatDiv.scrollHeight;
+
+    return bubble;
+}
+
+worker.onmessage = (e) => {
+    const { type, msg, token } = e.data;
+
+    if (type === "log") {
+        console.log("[Worker]", msg);
+    }
+    else if (type === "stream_token") {
+        // 最初のトークンなら吹き出しを作る
+        if (!streamingDiv) {
+            streamingDiv = appendMessageStreaming("bot");
+        }
+
+        // どんどん追加していく
+        streamingDiv.innerText += token;
+        chatDiv.scrollTop = chatDiv.scrollHeight;
+    }
+    else if (type === "stream_end") {
+        streamingDiv = null;   // 終了
+    }
+};
+
+
 // 初期化
 initWorker();
+let streamingDiv = null;
 </script>
 
 </body>

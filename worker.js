@@ -63,13 +63,22 @@ function sampleNext(arr) {
     return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function generate_markov(trans, n, length = 200) {
+function generate_markov_streaming(trans, n, length = 200) {
     const keys = Array.from(trans.keys());
-    if (keys.length === 0) return [];
+    if (keys.length === 0) {
+        postMessage({ type: "stream_end" });
+        return;
+    }
 
     let key = keys[Math.floor(Math.random() * keys.length)];
     let seq = JSON.parse(key);
 
+    // 最初の n-gram をそのまま吐く（1つずつ）
+    for (let t of seq) {
+        postMessage({ type: "stream_token", token: t });
+    }
+
+    // 1トークンずつリアルタイム生成
     for (let i = 0; i < length - n; i++) {
         const arr = trans.get(key);
         if (!arr) break;
@@ -77,10 +86,15 @@ function generate_markov(trans, n, length = 200) {
         let next = sampleNext(arr);
         seq.push(next);
 
+        // ★ ここで1トークンリアルタイム送信！
+        postMessage({ type: "stream_token", token: next });
+
         key = JSON.stringify(seq.slice(seq.length - n));
     }
-    return seq;
+
+    postMessage({ type: "stream_end" });
 }
+
 
 // -------------------------
 // Worker コマンド
@@ -121,6 +135,8 @@ onmessage = async function(e) {
         for (const chunk of learningChunks) {
             const toks = tokenize_chunk(chunk);
             allTokens.push(...toks);
+	const model = build_markov(near, ngram_n);
+    	generate_markov_streaming(model, ngram_n, 200);
         }
 
         // ★ ターゲットの周辺だけ軽量抽出
