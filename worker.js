@@ -2,10 +2,16 @@ let learningText = '';
 let ngram_n = 2;
 
 // 日本語トークナイザ
-function tokenize(text) {
-  const re = /[\u4E00-\u9FFF]+|[\u3040-\u309F]+|[\u30A0-\u30FF]+|\w+|\s|[^\w\s]/g;
-  return text.match(re) || [];
+// Worker 側
+function tokenize(text){
+    if(!text) text = "";  // undefined の場合は空文字にする
+    const re = /[\u4E00-\u9FFF]+|[\u3040-\u309F]+|[\u30A0-\u30FF]+|\w+|\s|[^\w\s]/g;
+    return text.match(re) || [];
 }
+
+// 埋め込みテキストを必ず文字列に
+let EMBED_TEXT = `これはテスト用テキストです。`;  // バッククォートで囲む
+
 
 // マルコフ生成
 function buildMarkov(tokens, n=2) {
