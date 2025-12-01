@@ -11,8 +11,7 @@ function sendLog(msg, progress){
 let EMBED_TEXT = (function(){
   return '
 
-  // デバッグ時は短くする。実運用で差し替え可。
-  // 例: return 'これはテスト。'.repeat(5000);
+
 １６：０４（本文）
 
 彦左衛門）無駄にしてしまうのか、あの猫ちゃんの絶妙なカラーリング！！！
