@@ -2,66 +2,153 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>マルコフ連鎖チャット</title>
+<title>HIKOZAEMON（LINE風）</title>
+
 <style>
-body { font-family: sans-serif; max-width: 700px; margin: 2em auto; }
-#chat { border: 1px solid #ccc; padding: 1em; height: 400px; overflow-y: auto; background: #f9f9f9; }
-.user { color: white; background: #007bff; padding: 0.5em; border-radius: 5px; margin: 0.5em 0; max-width: 80%; }
-.bot { color: black; background: #e0e0e0; padding: 0.5em; border-radius: 5px; margin: 0.5em 0; max-width: 80%; }
-input, button { padding: 0.5em; font-size: 1em; margin-top: 0.5em; width: 80%; }
+body {
+  font-family: "Helvetica", "Arial", sans-serif;
+  background: #dfe7eb;
+  margin: 0;
+  padding: 0;
+}
+
+/* チャットエリア */
+#chat {
+  height: 85vh;
+  overflow-y: auto;
+  padding: 1em;
+  box-sizing: border-box;
+}
+
+/* 入力エリア */
+#inputArea {
+  display: flex;
+  padding: 0.5em;
+  background: #ffffff;
+  border-top: 1px solid #ccc;
+}
+#userInput {
+  flex: 1;
+  padding: 0.7em;
+  font-size: 1em;
+  border: 1px solid #ccc;
+  border-radius: 20px;
+}
+#sendBtn {
+  margin-left: 0.5em;
+  padding: 0.7em 1.2em;
+  background: #06c755;
+  color: white;
+  border: none;
+  border-radius: 20px;
+  font-size: 1em;
+}
+
+/* 吹き出し（LINE風） */
+.message {
+  display: flex;
+  margin: 0.5em 0;
+}
+.user {
+  justify-content: flex-end;
+}
+.bot {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 70%;
+  padding: 0.7em 1em;
+  border-radius: 14px;
+  font-size: 0.95em;
+  line-height: 1.4em;
+}
+
+/* ユーザー（右側） */
+.user .bubble {
+  background: #06c755;
+  color: white;
+  border-bottom-right-radius: 0;
+}
+
+/* Bot（左側） */
+.bot .bubble {
+  background: #ffffff;
+  color: #222;
+  border-bottom-left-radius: 0;
+}
 </style>
 </head>
 <body>
 
-<h2>マルコフ連鎖チャット（Worker + 外部テキスト）</h2>
-
-<input type="text" id="userInput" placeholder="ここに文字列を入力">
-<button onclick="sendMessage()">送信</button>
-
 <div id="chat"></div>
+
+<div id="inputArea">
+  <input type="text" id="userInput" placeholder="メッセージを入力…">
+  <button id="sendBtn" onclick="sendMessage()">送信</button>
+</div>
 
 <script>
 const chatDiv = document.getElementById('chat');
 let worker;
 
-// Worker 初期化とテキスト読み込み
+// ---------------------------------------
+// Worker 初期化
+// ---------------------------------------
 async function initWorker() {
-  // Worker 作成
   worker = new Worker('worker.js');
 
   worker.onmessage = function(e) {
     const { type, msg } = e.data;
-    if(type === 'log') {
+
+    if (type === 'log') {
       console.log('Worker:', msg);
-    } else if(type === 'result') {
+    }
+    else if (type === 'result') {
       appendChat('bot', msg);
     }
   };
 
-  // テキストデータ fetch
+  // 外部テキストロード
   const response = await fetch('data.txt');
   const text = await response.text();
 
   worker.postMessage({ type: 'init', text: text });
 }
 
+// ---------------------------------------
+// 送信
+// ---------------------------------------
 function sendMessage() {
-  const input = document.getElementById('userInput').value.trim();
-  if (!input) return;
-  appendChat('user', input);
-  document.getElementById('userInput').value = '';
-  worker.postMessage({ type: 'generate', input: input });
+  const input = document.getElementById('userInput');
+  const val = input.value.trim();
+  if (!val) return;
+
+  appendChat('user', val);
+  input.value = '';
+
+  worker.postMessage({ type: 'generate', input: val });
 }
 
+// ---------------------------------------
+// 吹き出し追加（LINE風）
+// ---------------------------------------
 function appendChat(role, text) {
-  const div = document.createElement('div');
-  div.className = role;
-  div.innerText = text;
-  chatDiv.appendChild(div);
+  const wrap = document.createElement('div');
+  wrap.className = 'message ' + role;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.innerText = text;
+
+  wrap.appendChild(bubble);
+  chatDiv.appendChild(wrap);
   chatDiv.scrollTop = chatDiv.scrollHeight;
 }
 
-// ページ読み込みで Worker 初期化
+// ---------------------------------------
+// ページ開始時に Worker 起動
+// ---------------------------------------
 initWorker();
 </script>
 
