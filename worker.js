@@ -128,7 +128,7 @@ onmessage = async function(e) {
         }
 
         // 対象トークン周辺だけ抽出して軽量化
-        const near = extract_near_target(allTokens, targetTokens, 2000);
+        const near = extract_near_target(allTokens, targetTokens, 10);
 
         // Markov構築
         const model = build_markov(near, ngram_n);
