@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>Worker デバッグ付き マルコフチャット</title>
+<style>
+body{font-family: sans-serif;margin:20px;background:#f7f9fc}
+#container{max-width:920px;margin:0 auto;background:#fff;padding:18px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.06)}
+#messages{height:420px;overflow-y:auto;border:1px solid #e3e7ee;padding:12px;border-radius:8px;background:#fafcff}
+.msg{margin:8px 0;padding:10px;border-radius:8px;max-width:80%}
+.user{background:#d6eeff;margin-left:auto}
+.bot{background:#f0ffe8;margin-right:auto}
+#inputArea{display:flex;gap:8px;margin-top:12px}
+#userInput{flex:1;height:84px;padding:10px;font-size:14px;border-radius:8px;border:1px solid #bbb}
+#sendBtn{width:110px;background:#2f9cff;color:#fff;border:none;border-radius:8px;cursor:pointer}
+#log{margin-top:12px;padding:10px;background:#121212;color:#fff;border-radius:6px;height:120px;overflow:auto;font-size:12px}
+#progressBar{height:10px;background:#eee;border-radius:6px;overflow:hidden;margin-top:10px}
+#progressInner{height:100%;width:0%;background:#2f9cff}
+</style>
+</head>
+<body>
+<div id="container">
+  <h2>Worker デバッグ付き マルコフ（テスト）</h2>
+  <div id="messages"></div>
+
+  <div id="inputArea">
+    <textarea id="userInput" placeholder="メッセージを入力..."></textarea>
+    <button id="sendBtn">送信</button>
+  </div>
+
+  <div id="progressBar"><div id="progressInner"></div></div>
+
+  <h4>デバッグログ（エラー／進捗）</h4>
+  <div id="log"></div>
+</div>
+
+<script>
+const messages = document.getElementById('messages');
+const logBox = document.getElementById('log');
+const progressInner = document.getElementById('progressInner');
+
+function addMsg(text, cls){
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.textContent = text;
+  messages.appendChild(d);
+  messages.scrollTop = messages.scrollHeight;
+}
+function debug(msg){
+  const p = document.createElement('div');
+  p.textContent = msg;
+  logBox.appendChild(p);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+// Worker 初期化（例外処理あり）
+let worker = null;
+try {
+  worker = new Worker('worker.js');
+  debug('Worker 作成: worker.js');
+} catch (e) {
+  debug('Worker を作成できませんでした: ' + e);
+  addMsg('Worker を作成できませんでした。コンソールと下のログを確認してください。', 'bot');
+}
+
+// Worker イベント
+if (worker) {
+  worker.onmessage = (ev) => {
+    const data = ev.data;
+    if (data.type === 'log') {
+      debug('[worker] ' + data.msg);
+      if (data.progress !== undefined) {
+        progressInner.style.width = Math.round(data.progress*100) + '%';
+      }
+    } else if (data.type === 'ready') {
+      debug('worker: ready');
+      addMsg('学習完了（worker） — 試しに入力して送信してください。', 'bot');
+    } else if (data.type === 'response') {
+      addMsg(data.text, 'bot');
+      debug('生成完了（length=' + data.text.length + ')');
+    } else if (data.type === 'error') {
+      debug('[worker error] ' + data.error);
+      addMsg('内部エラーが発生しました。ログを確認してください。', 'bot');
+    }
+  };
+
+  worker.onerror = (e) => {
+    debug('Worker エラー: ' + e.message + ' at ' + e.filename + ':' + e.lineno);
+    addMsg('Worker 内で例外が発生しました。コンソールを確認してください。', 'bot');
+  };
+}
+
+// 送信時
+document.getElementById('sendBtn').onclick = () => {
+  const val = document.getElementById('userInput').value.trim();
+  if (!val) return;
+  addMsg(val, 'user');
+  document.getElementById('userInput').value = '';
+
+  if (!worker) {
+    addMsg('Worker が無効です（ブラウザかパスを確認）。', 'bot');
+    return;
+  }
+
+  // ここでは最後の1文字を seed として渡す（worker側で使う）
+  const seed = val[val.length - 1] || 'あ';
+  worker.postMessage({ type:'generate', seed: seed });
+  debug('送信: generate (seed="' + seed + '")');
+};
+
+// ページアンロード時にworkerをterminate
+window.addEventListener('beforeunload', () => {
+  if (worker) worker.terminate();
+});
+</script>
+</body>
+</html>
