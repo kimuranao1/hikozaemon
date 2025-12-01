@@ -4,13 +4,7 @@ function sendLog(msg, progress){
   postMessage({ type:'log', msg: msg, progress: progress });
 }
 
-// ===== ここで埋め込むテキスト =====
-// テスト用に小さめから試してください。
-// 実データを入れる場合は文字数に注意。
-// 例: 'A'.repeat(30000) などで試す。
-let EMBED_TEXT = (function(){
-  // デバッグ時は短くする。実運用で差し替え可。
-  // 例: return 'これはテスト。'.repeat(5000);
+
 １６：０４
 
 彦左衛門）無駄にしてしまうのか、あの猫ちゃんの絶妙なカラーリング！！！
