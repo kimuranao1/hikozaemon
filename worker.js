@@ -5878,8 +5878,9 @@ https://zisakuzienyurusumaji.hatenablog.com/entry/2025/11/30/163950
 
 
 
- '.repeat(5000);
+ '
 })();
+
 sendLog('埋め込みテキスト長: ' + EMBED_TEXT.length);
 
 // ===== チャンク分割パラメータ =====
