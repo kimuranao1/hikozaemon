@@ -9,9 +9,11 @@ function sendLog(msg, progress){
 // 実データを入れる場合は文字数に注意。
 // 例: 'A'.repeat(30000) などで試す。
 let EMBED_TEXT = (function(){
+  return '
+
   // デバッグ時は短くする。実運用で差し替え可。
   // 例: return 'これはテスト。'.repeat(5000);
-１６：０４
+１６：０４（本文）
 
 彦左衛門）無駄にしてしまうのか、あの猫ちゃんの絶妙なカラーリング！！！
 
@@ -5876,9 +5878,8 @@ https://zisakuzienyurusumaji.hatenablog.com/entry/2025/11/30/163950
 
 
 
- // 約約30k文字前後の例
+ '.repeat(5000);
 })();
-
 sendLog('埋め込みテキスト長: ' + EMBED_TEXT.length);
 
 // ===== チャンク分割パラメータ =====
