@@ -59,18 +59,19 @@ function injectTargets(tokens, targetTokens, times = 500) {
 }
 
 // --------------------
-// GPT風 A/B 対話（合計4発話）
+// GPT風 Q/A 対話生成（4発話）
 // --------------------
 function generateDialogue(markovText) {
     const lines = markovText.split(/(?<=。|\!|\?)\s*/);
 
-    const pick = () => (lines[Math.floor(Math.random() * lines.length)] || markovText).trim();
+    const pick = () =>
+        (lines[Math.floor(Math.random() * lines.length)] || markovText).trim();
 
     return (
-`A: ${pick()}
-B: ${pick()}
+`Q: ${pick()}
 A: ${pick()}
-B: ${pick()}`
+Q: ${pick()}
+A: ${pick()}`
     );
 }
 
@@ -95,7 +96,7 @@ onmessage = function(e) {
         const trans = buildMarkov(tokens, ngram_n);
         const gen = generateMarkov(trans, ngram_n, 200);
 
-        // ★ A→B→A→B の4発話
+        // ★ Q→A→Q→A の4発話へ変換
         const dialogue = generateDialogue(gen);
 
         postMessage({ type: 'result', msg: dialogue });
