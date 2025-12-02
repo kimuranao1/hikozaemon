@@ -5,7 +5,7 @@
 let learningText = "";  // まとめた学習テキスト
 let conversationLog = "";
 let maxTokenLen = 10;
-let ngram_n = 2;
+let ngram_n = 3;
 
 // -------------------------
 // 日本語トークナイザ
@@ -218,3 +218,4 @@ onmessage = async function(e){
         postMessage({ type:"result", text: textOut });
     }
 };
+
