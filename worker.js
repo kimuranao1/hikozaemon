@@ -49,7 +49,7 @@ function buildContextCounts(tokens, targets, N=50) {
 
 // -------------------------
 // スコア計算
-function computeScores(counts, totals, power=1.0) {
+function computeScores(counts, totals, power=4.0) {
     const scores = new Map();
     counts.forEach((cnt, key) => {
         const [relStr, tok] = key.split('§');
@@ -178,13 +178,13 @@ function injectTargets(tokens, targetTokensSet, times=13){
 // -------------------------
 // Web Workerメッセージ処理
 onmessage = async function(e){
-    const { type, folderTexts, conversationLogText, input, ngram=2, genLength=200 } = e.data;
+    const { type, folderTexts, conversationLogText, input, ngram=4, genLength=200 } = e.data;
 
     if (type==="init"){
         learningText = folderTexts.join("\n");
         conversationLog = conversationLogText || "";
         maxTokenLen = 10;
-        ngram_n = ngram || 2;
+        ngram_n = ngram || 4;
         postMessage({ type:"log", msg:`学習テキスト長: ${learningText.length} 文字` });
     }
 
@@ -218,5 +218,6 @@ onmessage = async function(e){
         postMessage({ type:"result", text: textOut });
     }
 };
+
 
 
