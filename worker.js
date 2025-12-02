@@ -30,7 +30,7 @@ function tokenizeJapanese(text, maxTokenLen = 10) {
 // -------------------------
 // 周辺トークン統計（Pythonのbuild_context_counts_multi）  
 // targets: Set
-function buildContextCounts(tokens, targets, N=50) {
+function buildContextCounts(tokens, targets, N=10) {
     const counts = new Map();
     const totals = new Map();
     for (let idx = 0; idx < tokens.length; idx++) {
@@ -201,7 +201,7 @@ onmessage = async function(e){
         tokens = injectTargets(tokens, targetTokens, 800);
 
         // 周辺統計
-        const { counts, totals } = buildContextCounts(tokens, targetTokens, 50);
+        const { counts, totals } = buildContextCounts(tokens, targetTokens, 10);
         const scores = computeScores(counts, totals, 4.0);
         const features = selectFeatures(scores, 1e-7);
 
@@ -218,6 +218,7 @@ onmessage = async function(e){
         postMessage({ type:"result", text: textOut });
     }
 };
+
 
 
 
