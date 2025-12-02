@@ -1,135 +1,220 @@
 // ================================
-// 300万文字対応 Web Worker（長文対応版）
+// Web Worker: Pythonマルコフ忠実移植版
 // ================================
 
-let learningChunks = [];  // 分割テキスト
+let learningText = "";  // まとめた学習テキスト
+let conversationLog = "";
+let maxTokenLen = 10;
 let ngram_n = 2;
 
 // -------------------------
-// 日本語対応トークナイザ
+// 日本語トークナイザ
 // -------------------------
-function tokenize_chunk(chunk, maxTokenLen = 10) {
+function tokenizeJapanese(text, maxTokenLen = 10) {
     const pattern = /[\u4E00-\u9FFF]+|[\u3040-\u309F]+|[\u30A0-\u30FF]+|\w+|\s|[^\w\s]/g;
     const tokens = [];
     let match;
-    while ((match = pattern.exec(chunk)) !== null) tokens.push(match[0]);
+    while ((match = pattern.exec(text)) !== null) {
+        let tok = match[0];
+        if (tok.length > maxTokenLen && !tok.match(/^\s$/) && !tok.match(/^[^\w\s]$/)) {
+            for (let i = 0; i < tok.length; i += maxTokenLen) {
+                tokens.push(tok.slice(i, i + maxTokenLen));
+            }
+        } else {
+            tokens.push(tok);
+        }
+    }
     return tokens;
 }
 
 // -------------------------
-// 対象トークン周辺だけ抽出（チャンク単位で軽量化）
-function extract_near_target_chunk(tokens, targetTokens, windowSize = 50) {
-    const targetIndices = [];
-    for (let i = 0; i < tokens.length; i++) {
-        if (targetTokens.has(tokens[i])) targetIndices.push(i);
+// 周辺トークン統計（Pythonのbuild_context_counts_multi）  
+// targets: Set
+function buildContextCounts(tokens, targets, N=50) {
+    const counts = new Map();
+    const totals = new Map();
+    for (let idx = 0; idx < tokens.length; idx++) {
+        if (!targets.has(tokens[idx])) continue;
+        for (let rel = -N; rel <= N; rel++) {
+            if (rel === 0) continue;
+            const pos = idx + rel;
+            if (pos < 0 || pos >= tokens.length) continue;
+            const key = `${rel}§${tokens[pos]}`;
+            counts.set(key, (counts.get(key) || 0) + 1);
+            totals.set(rel, (totals.get(rel) || 0) + 1);
+        }
     }
-    if (targetIndices.length === 0) return [];
-    
-    // 最初の出現位置だけ周辺を抽出
-    const s = Math.max(0, targetIndices[0] - windowSize);
-    const e = Math.min(tokens.length, targetIndices[0] + windowSize);
-    return tokens.slice(s, e);
+    return { counts, totals };
 }
 
 // -------------------------
-// トークン出現回数カウント
-function countTokens(tokens) {
-    const counter = new Map();
-    for (const t of tokens) counter.set(t, (counter.get(t)||0)+1);
-    return counter;
+// スコア計算
+function computeScores(counts, totals, power=1.0) {
+    const scores = new Map();
+    counts.forEach((cnt, key) => {
+        const [relStr, tok] = key.split('§');
+        const rel = parseInt(relStr);
+        const tot = totals.get(rel) || 1;
+        scores.set(key, Math.pow(cnt / tot, power));
+    });
+    return scores;
 }
 
 // -------------------------
-// 出現頻度で軽くフィルタ
-function filterTokensByFreq(tokens, counter, power=1.5, threshold=1.0) {
-    return tokens.filter(t => Math.pow(counter.get(t)||0, power) >= threshold);
+// フィーチャー選択
+function selectFeatures(scores, threshold=1e-7) {
+    const kept = [];
+    scores.forEach((sc, key) => {
+        if (sc >= threshold) {
+            const [relStr, tok] = key.split('§');
+            kept.push({ rel: parseInt(relStr), tok, score: sc });
+        }
+    });
+    kept.sort((a,b) => a.rel - b.rel || b.score - a.score || a.tok.localeCompare(b.tok));
+    return kept;
 }
 
 // -------------------------
-// 軽量 n-gram Markov
-function build_markov(tokens, n = 2) {
+// ターゲット埋め込み
+function embedFeaturesInCorpus(tokens, targets, features, perOccurrence=false) {
+    const out = [];
+    if (!perOccurrence) {
+        const featureTuple = features.map(f => [f.rel, f.tok, f.score]);
+        tokens.forEach(tok => {
+            if (targets.has(tok)) {
+                out.push(["TARGET", featureTuple, tok]);
+            } else {
+                out.push(tok);
+            }
+        });
+    } else {
+        const N = Math.max(...features.map(f => Math.abs(f.rel)), 0);
+        for (let i=0; i<tokens.length; i++){
+            const tok = tokens[i];
+            if (!targets.has(tok)) {
+                out.push(tok);
+                continue;
+            }
+            const local_feats = [];
+            for (let rel=-N; rel<=N; rel++){
+                if (rel===0) continue;
+                const pos=i+rel;
+                if (pos<0 || pos>=tokens.length) continue;
+                local_feats.push([rel, tokens[pos], 1.0]);
+            }
+            out.push(["TARGET", local_feats, tok]);
+        }
+    }
+    return out;
+}
+
+// -------------------------
+// n-gram Markov
+function buildMarkovNgram(tokens, n=2){
     const trans = new Map();
-    for (let i = 0; i < tokens.length - n; i++) {
-        const key = tokens.slice(i, i+n).join("§"); // JSON.stringifyより高速
-        const next = tokens[i+n];
-        if (!trans.has(key)) trans.set(key, []);
-        trans.get(key).push(next);
+    for (let i=0; i<tokens.length-n; i++){
+        const key = tokens.slice(i,i+n).map(t => JSON.stringify(t)).join("§");
+        const nxt = tokens[i+n];
+        if (!trans.has(key)) trans.set(key, new Map());
+        const counter = trans.get(key);
+        counter.set(nxt, (counter.get(nxt)||0)+1);
     }
     return trans;
 }
 
-function sampleNext(arr) {
-    return arr[Math.floor(Math.random() * arr.length)];
+function sampleNext(counterMap){
+    const entries = Array.from(counterMap.entries());
+    const total = entries.reduce((a,b)=>a+b[1],0);
+    let r = Math.random()*total;
+    let cum=0;
+    for (const [k,v] of entries){
+        cum += v;
+        if (r<=cum) return k;
+    }
+    return entries[Math.floor(Math.random()*entries.length)][0];
 }
 
 // -------------------------
-// ストリーミング生成（非同期でフリーズ防止）
-async function generate_markov_streaming(trans, n, length=200, delay=0) {
+// Markov生成
+function generateMarkovNgram(trans, n=2, length=200, start=null){
+    if (trans.size===0) return [];
     const keys = Array.from(trans.keys());
-    if (keys.length === 0) {
-        postMessage({type:"stream_end"});
-        return;
+    let key = start || keys[Math.floor(Math.random()*keys.length)];
+    let seq = key.split("§").map(k => JSON.parse(k));
+
+    for (let i=0;i<length-n;i++){
+        const k = seq.slice(-n).map(t => JSON.stringify(t)).join("§");
+        let counter = trans.get(k);
+        if (!counter || counter.size===0){
+            key = keys[Math.floor(Math.random()*keys.length)];
+            counter = trans.get(key);
+        }
+        seq.push(sampleNext(counter));
     }
-
-    let key = keys[Math.floor(Math.random()*keys.length)];
-    let seq = key.split("§");
-
-    // 最初の n-gram を送信
-    for (let t of seq) {
-        postMessage({type:"stream_token", token:t});
-        if(delay>0) await new Promise(r=>setTimeout(r, delay));
-    }
-
-    for (let i=0; i<length-n; i++) {
-        const arr = trans.get(key);
-        if(!arr || arr.length===0) break;
-        const next = sampleNext(arr);
-        seq.push(next);
-        postMessage({type:"stream_token", token:next});
-        if(delay>0) await new Promise(r=>setTimeout(r, delay));
-        key = seq.slice(seq.length-n).join("§");
-
-        // 1チャンク処理ごとに少し待機してフリーズ回避
-        if(i % 50 === 0) await new Promise(r=>setTimeout(r,0));
-    }
-
-    postMessage({type:"stream_end"});
+    return seq;
 }
 
 // -------------------------
-// Worker メッセージ処理
-onmessage = async function(e){
-    const {type, text, input} = e.data;
+// tokens→text
+function tokensToText(tokens){
+    return tokens.map(t=>{
+        if (Array.isArray(t) && t[0]==="TARGET") return t[2];
+        return t.toString();
+    }).join("");
+}
 
-    // 初期化
-    if(type==="init"){
-        learningChunks=[];
-        const CHUNK_SIZE=80000;
-        for(let i=0;i<text.length;i+=CHUNK_SIZE){
-            learningChunks.push(text.slice(i,i+CHUNK_SIZE));
-        }
-        postMessage({type:"log", msg:`巨大テキストを ${learningChunks.length} チャンクに分割しました`});
+// -------------------------
+// ターゲット混ぜ込み
+function injectTargets(tokens, targetTokensSet, times=13){
+    let out = tokens.slice();
+    const tgtArr = Array.from(targetTokensSet);
+    for (let i=0;i<times;i++){
+        const pos = Math.floor(Math.random()*out.length);
+        out = [...out.slice(0,pos), ...tgtArr, ...out.slice(pos)];
+    }
+    return out;
+}
+
+// -------------------------
+// Web Workerメッセージ処理
+onmessage = async function(e){
+    const { type, folderTexts, conversationLogText, input, ngram=2, genLength=200 } = e.data;
+
+    if (type==="init"){
+        learningText = folderTexts.join("\n");
+        conversationLog = conversationLogText || "";
+        maxTokenLen = 10;
+        ngram_n = ngram || 2;
+        postMessage({ type:"log", msg:`学習テキスト長: ${learningText.length} 文字` });
     }
 
-    // 生成
-    if(type==="generate"){
-        if(!input||input.trim()==="") return;
-        const targetTokens = new Set(tokenize_chunk(input));
+    if (type==="generate"){
+        if (!input || input.trim()==="") return;
 
-        let near = [];
-        // チャンク単位で対象トークン周辺だけ抽出
-        for(const chunk of learningChunks){
-            const toks = tokenize_chunk(chunk);
-            const n = extract_near_target_chunk(toks, targetTokens, 50);
-            near.push(...n);
-            // 1チャンクごとに少し待つ
-            await new Promise(r=>setTimeout(r,0));
-        }
+        // ターゲットトークン化
+        const targetTokens = new Set(tokenizeJapanese(input, maxTokenLen));
 
-        const counter = countTokens(near);
-        const filtered = filterTokensByFreq(near, counter, 1.5, 1.0);
-        const model = build_markov(filtered, ngram_n);
+        // 学習テキスト＋会話ログ
+        let tokens = tokenizeJapanese(learningText+"\n"+conversationLog, maxTokenLen);
 
-        await generate_markov_streaming(model, ngram_n, 200, 0);
+        // ターゲット混ぜ込み
+        tokens = injectTargets(tokens, targetTokens, 100);
+
+        // 周辺統計
+        const { counts, totals } = buildContextCounts(tokens, targetTokens, 50);
+        const scores = computeScores(counts, totals, 4.0);
+        const features = selectFeatures(scores, 1e-7);
+
+        // 埋め込み
+        const embedded = embedFeaturesInCorpus(tokens, targetTokens, features, false);
+
+        // Markov構築
+        const model = buildMarkovNgram(embedded, ngram_n);
+
+        // 生成
+        const seq = generateMarkovNgram(model, ngram_n, genLength);
+
+        const textOut = tokensToText(seq);
+        postMessage({ type:"result", text: textOut });
     }
 };
