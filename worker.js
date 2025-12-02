@@ -1,222 +1,217 @@
+@@ -1,17 +1,15 @@
 // ================================
-// 300万文字対応 Web Worker（特徴込み Markov + 文頭/文末補正 + ストリーミング）
+// 300万文字対応 Web Worker（ストリーミング最適化）
+// 300万文字対応 Web Worker（緩い Markov + ストリーミング）
 // ================================
 
-let learningChunks = [];
+let learningChunks = [];  // 分割テキスト
 let ngram_n = 2;
 
 // -------------------------
-// 汎用トークナイザ（空白・改行・記号を保持）
+// 日本語対応トークナイザ
+// -------------------------
 function tokenize_chunk(chunk, maxTokenLen = 10) {
     const pattern = /[\u4E00-\u9FFF]+|[\u3040-\u309F]+|[\u30A0-\u30FF]+|\w+|\s|[^\w\s]/g;
     const tokens = [];
+
     let match;
     while ((match = pattern.exec(chunk)) !== null) {
         let tok = match[0];
-        if (tok.length > maxTokenLen && !/^\s$/.test(tok) && !/[^\w\s]/.test(tok)) {
-            for (let i = 0; i < tok.length; i += maxTokenLen) {
-                tokens.push(tok.slice(i, i + maxTokenLen));
-            }
+@@ -27,8 +25,8 @@ function tokenize_chunk(chunk, maxTokenLen = 10) {
+}
+
+// -------------------------
+// 対象トークン周辺だけ抽出（高速化）
+function extract_near_target(allTokens, targetTokens, windowSize = 10) {
+// 対象トークン周辺抽出
+function extract_near_target(allTokens, targetTokens, windowSize = 2000) {
+    const targetIndices = [];
+    for (let i = 0; i < allTokens.length; i++) {
+        if (targetTokens.has(allTokens[i])) targetIndices.push(i);
+@@ -37,103 +35,138 @@ function extract_near_target(allTokens, targetTokens, windowSize = 10) {
+    if (targetIndices.length === 0)
+        return allTokens.slice(0, windowSize);
+
+    const s = Math.max(0, targetIndices[0] - windowSize);
+    const e = Math.min(allTokens.length, targetIndices[0] + windowSize);
+    return allTokens.slice(s, e);
+    // 複数ターゲットを考慮して統合
+    let ranges = targetIndices.map(idx => [
+        Math.max(0, idx - windowSize),
+        Math.min(allTokens.length, idx + windowSize)
+    ]);
+
+    // 範囲をマージ
+    ranges.sort((a,b) => a[0]-b[0]);
+    let merged = [];
+    let cur = ranges[0];
+    for (let i = 1; i < ranges.length; i++) {
+        if (ranges[i][0] <= cur[1]) {
+            cur[1] = Math.max(cur[1], ranges[i][1]);
         } else {
-            tokens.push(tok);
+            merged.push(cur);
+            cur = ranges[i];
         }
     }
-    return tokens;
+    merged.push(cur);
+
+    // マージ後のトークン抽出
+    let near = [];
+    for (const [s,e] of merged) near.push(...allTokens.slice(s,e));
+    return near;
 }
 
 // -------------------------
-// 入力トークナイザ（連続文字列を最大3文字に分割）
-function tokenize_input_as_targets(text) {
-    return tokenize_chunk(text, 3).filter(t => t !== "");
+// トークン出現回数カウント
+function countTokens(tokens) {
+    const counter = new Map();
+    for (const t of tokens) counter.set(t, (counter.get(t)||0)+1);
+    return counter;
 }
 
 // -------------------------
-// 周辺トークン統計（N-gram特徴統計）
-function build_context_counts_multi(tokens, targetSet, N) {
-    const counts = new Map();
-    const totals = new Map();
-    for (let idx = 0; idx < tokens.length; idx++) {
-        const tok = tokens[idx];
-        if (!targetSet.has(tok)) continue;
-        for (let rel = -N; rel <= N; rel++) {
-            if (rel === 0) continue;
-            const pos = idx + rel;
-            if (pos < 0 || pos >= tokens.length) continue;
-            const key = rel + '\u0000' + tokens[pos];
-            counts.set(key, (counts.get(key) || 0) + 1);
-            totals.set(rel, (totals.get(rel) || 0) + 1);
-        }
-        if (idx % 50000 === 0) postMessage({type:"progress", msg:`build_context ${idx}/${tokens.length}`});
-    }
-    return {counts, totals};
+// 出現頻度に応じて緩くフィルタ
+function filterTokensByFreq(tokens, counter, power=1.5, threshold=1.0) {
+    return tokens.filter(t => Math.pow(counter.get(t)||0, power) >= threshold);
 }
 
 // -------------------------
-function compute_scores(counts, totals, power = 1.0) {
-    const scores = new Map();
-    for (const [k, cnt] of counts.entries()) {
-        const rel = parseInt(k.split('\u0000')[0], 10);
-        const tot = totals.get(rel) || 0;
-        if (tot === 0) continue;
-        scores.set(k, Math.pow(cnt / tot, power));
-    }
-    return scores;
-}
-
-// -------------------------
-function select_features(scores, threshold) {
-    const arr = [];
-    for (const [k, sc] of scores.entries()) {
-        if (sc >= threshold) {
-            const parts = k.split('\u0000');
-            arr.push({rel: parseInt(parts[0], 10), token: parts[1], score: sc});
-        }
-    }
-    arr.sort((a, b) => (a.rel - b.rel) || (b.score - a.score) || a.token.localeCompare(b.token));
-    return arr;
-}
-
-// -------------------------
-function embed_features_in_corpus(tokens, targetSet, features) {
-    const featTuple = features.map(f => ({rel: f.rel, token: f.token, score: f.score}));
-    const out = [];
-    for (const tok of tokens) {
-        if (targetSet.has(tok)) out.push({__target:true, text: tok, features: featTuple});
-        else out.push(tok);
-    }
-    return out;
-}
-
-// -------------------------
-function tokenToText(t) {
-    if (typeof t === 'string') return t;
-    if (t && t.__target) return t.text;
-    return String(t);
-}
-
-// -------------------------
+// 軽量 n-gram Markov
+function build_markov(tokens, n = 2) {
 function build_markov(tokens, n=2) {
     const trans = new Map();
     for (let i = 0; i < tokens.length - n; i++) {
-        const key = tokens.slice(i, i+n).map(tok => tok);
+        const key = JSON.stringify(tokens.slice(i, i + n));
+        const next = tokens[i + n];
+    for (let i=0;i<tokens.length-n;i++){
+        const key = JSON.stringify(tokens.slice(i,i+n));
         const next = tokens[i+n];
-        const kstr = JSON.stringify(key);
-        if (!trans.has(kstr)) trans.set(kstr, []);
-        trans.get(kstr).push(next);
-        if (i % 50000 === 0) postMessage({type:"progress", msg:`build_markov ${i}/${tokens.length}`});
+        if (!trans.has(key)) trans.set(key, []);
+        trans.get(key).push(next);
     }
     return trans;
 }
 
-// -------------------------
-// 文頭補正
-function fix_start_tokens(tokens) {
-    const re = /[。！？!?…]/;
-    for (let i = 0; i < tokens.length-1; i++) {
-        if (re.test(tokenToText(tokens[i]))) return tokens.slice(i+1);
-    }
-    return tokens;
+function sampleNext(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+function sampleNext(arr){
+    return arr[Math.floor(Math.random()*arr.length)];
 }
 
 // -------------------------
-// 文末補正
-function fix_end_tokens(tokens, trans, ngram_n, maxExtend=150) {
-    const re = /[。！？!?…]/;
-    let seq = tokens.slice();
-    for (let i=0;i<maxExtend;i++){
-        const lastTokens = seq.slice(-ngram_n);
-        if (lastTokens.some(t=>re.test(tokenToText(t)))) break;
-        const key = JSON.stringify(lastTokens);
-        const arr = trans.get(key);
-        if(!arr || arr.length===0) break;
-        seq.push(arr[Math.floor(Math.random()*arr.length)]);
-    }
-    return seq;
-}
-
-// -------------------------
-function sampleNextWeighted(arr, targetSet) {
-    const weights = arr.map(tok => {
-        let w = 1.0;
-        if(tok && tok.__target) w *= 4.0;
-        if(tok.features) {
-            for(const f of tok.features) if(targetSet.has(f.token)) w *= (1.0+f.score*5.0);
-        }
-        return w;
-    });
-    const total = weights.reduce((a,b)=>a+b,0);
-    let r = Math.random()*total;
-    for(let i=0;i<arr.length;i++){
-        r-=weights[i];
-        if(r<=0) return arr[i];
-    }
-    return arr[arr.length-1];
-}
-
-// -------------------------
-async function generate_markov_streaming(trans, n, length=200, delay=0, targetSet=null){
+// ストリーミング生成
+function generate_markov_streaming(trans, n, length = 200) {
+async function generate_markov_streaming(trans, n, length=200, delay=0) {
     const keys = Array.from(trans.keys());
-    if(keys.length===0){postMessage({type:"stream_end"}); return;}
+    if (keys.length === 0) {
+        postMessage({ type: "stream_end" });
+    if (keys.length===0){
+        postMessage({type:"stream_end"});
+        return;
+    }
 
+    let key = keys[Math.floor(Math.random() * keys.length)];
     let key = keys[Math.floor(Math.random()*keys.length)];
-    let seq = JSON.parse(key); // array of tokens
+    let seq = JSON.parse(key);
 
-    // 最初の n-gram
-    for(const tok of seq){
-        postMessage({type:"stream_token", token: tokenToText(tok)});
-        if(delay>0) await new Promise(r=>setTimeout(r, delay));
+    // 最初の n-gram をそのまま送信
+    for (let t of seq) {
+        postMessage({ type: "stream_token", token: t });
+    // 最初の n-gram を順番に送信
+    for (let t of seq){
+        postMessage({type:"stream_token", token:t});
+        if(delay>0) await new Promise(r=>setTimeout(r,delay));
     }
 
-    for(let i=0;i<length-n;i++){
-        const kstr = JSON.stringify(seq.slice(-n));
-        const arr = trans.get(kstr);
+    // 1トークンずつ生成
+    for (let i = 0; i < length - n; i++) {
+    for (let i=0;i<length-n;i++){
+        const arr = trans.get(key);
+        if (!arr || arr.length === 0) break;
         if(!arr || arr.length===0) break;
-        const next = targetSet ? sampleNextWeighted(arr,targetSet) : arr[Math.floor(Math.random()*arr.length)];
+
+        const next = sampleNext(arr);
         seq.push(next);
-        postMessage({type:"stream_token", token: tokenToText(next)});
-        if(delay>0) await new Promise(r=>setTimeout(r, delay));
+
+        postMessage({ type: "stream_token", token: next });
+        postMessage({type:"stream_token", token:next});
+        if(delay>0) await new Promise(r=>setTimeout(r,delay));
+
+        key = JSON.stringify(seq.slice(seq.length - n));
+        key = JSON.stringify(seq.slice(seq.length-n));
     }
 
+    postMessage({ type: "stream_end" });
     postMessage({type:"stream_end"});
 }
 
 // -------------------------
-onmessage = async function(e){
-    const {type, text, input, params} = e.data;
+// Worker メッセージ処理
+onmessage = async function(e) {
+    const { type, text, input } = e.data;
 
-    if(type==='init'){
+    // -------------------------
+    // 初期化：巨大テキストを分割して保持
+    if (type === "init") {
+        learningChunks = [];
+        const CHUNK_SIZE = 80000; // 8万文字ごとに分割
+        for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+            learningChunks.push(text.slice(i, i + CHUNK_SIZE));
+onmessage = async function(e){
+    const {type, text, input} = e.data;
+
+    // 初期化
+    if(type==="init"){
         learningChunks=[];
-        const CHUNK_SIZE = (params && params.CHUNK_SIZE) || 80000;
-        for(let i=0;i<text.length;i+=CHUNK_SIZE) learningChunks.push(text.slice(i,i+CHUNK_SIZE));
-        postMessage({type:'log', msg:`巨大テキストを ${learningChunks.length} チャンクに分割しました`});
+        const CHUNK_SIZE=80000;
+        for(let i=0;i<text.length;i+=CHUNK_SIZE){
+            learningChunks.push(text.slice(i,i+CHUNK_SIZE));
+        }
+
+        postMessage({
+            type: "log",
+            msg: `巨大テキストを ${learningChunks.length} チャンクに分割しました`
+        });
+        postMessage({type:"log", msg:`巨大テキストを ${learningChunks.length} チャンクに分割しました`});
     }
 
-    if(type==='generate'){
-        if(!input||input.trim()==='') return;
+    // -------------------------
+    // 生成
+    if (type === "generate") {
+        if (!input || input.trim() === "") return;
+    if(type==="generate"){
+        if(!input||input.trim()==="") return;
 
-        const targetTokensArr = tokenize_input_as_targets(input);
-        const targetSet = new Set(targetTokensArr);
+        // 入力をトークナイズして対象トークンセット作成
+        const targetTokens = new Set(tokenize_chunk(input));
 
+        // チャンクを順にトークナイズして結合
         let allTokens = [];
-        for(const chunk of learningChunks) allTokens.push(...tokenize_chunk(chunk,10));
+        for (const chunk of learningChunks) {
+        // チャンク順にトークナイズして結合（軽量化のため部分的にでもOK）
+        let allTokens=[];
+        for(const chunk of learningChunks){
+            const toks = tokenize_chunk(chunk);
+            allTokens.push(...toks);
+        }
 
-        const N = (params&&params.N)||50;
-        const power = (params&&params.power)||4.0;
-        const threshold = (params&&params.threshold)||1e-7;
+        // 対象トークン周辺だけ抽出して軽量化
+        const near = extract_near_target(allTokens, targetTokens, 10);
+        // 対象周辺抽出
+        let near = extract_near_target(allTokens, targetTokens, 50);
 
-        const {counts, totals} = build_context_counts_multi(allTokens,targetSet,N);
-        const scores = compute_scores(counts,totals,power);
-        const features = select_features(scores,threshold);
+        // トークン頻度カウント
+        const counter = countTokens(near);
 
-        const tokenized = embed_features_in_corpus(allTokens,targetSet,features);
-        const model = build_markov(tokenized, ngram_n);
+        // 緩くフィルタ
+        const filtered = filterTokensByFreq(near, counter, 1.5, 1.0);
 
-        let tokens = tokenized.slice(0, Math.min(ngram_n, tokenized.length));
-        tokens = fix_start_tokens(tokens);
-        tokens = fix_end_tokens(tokens, model, ngram_n, 200);
+        // Markov構築
+        const model = build_markov(near, ngram_n);
+        const model = build_markov(filtered, ngram_n);
 
-        const gen_length = (params&&params.gen_length)||200;
-        const delay = (params&&params.delay)||0;
-        generate_markov_streaming(model, ngram_n, gen_length, delay, targetSet);
+        // ストリーミング生成
+        generate_markov_streaming(model, ngram_n, 200);
+        generate_markov_streaming(model, ngram_n, 200, 0);
     }
 };
