@@ -183,7 +183,7 @@ onmessage = async function(e){
     if (type==="init"){
         learningText = folderTexts.join("\n");
         conversationLog = conversationLogText || "";
-        maxTokenLen = 10;
+        maxTokenLen = 8;
         ngram_n = ngram || 4;
         postMessage({ type:"log", msg:`学習テキスト長: ${learningText.length} 文字` });
     }
@@ -218,6 +218,7 @@ onmessage = async function(e){
         postMessage({ type:"result", text: textOut });
     }
 };
+
 
 
 
