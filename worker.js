@@ -178,7 +178,7 @@ function injectTargets(tokens, targetTokensSet, times=13){
 // -------------------------
 // Web Workerメッセージ処理
 onmessage = async function(e){
-    const { type, folderTexts, conversationLogText, input, ngram=4, genLength=200 } = e.data;
+    const { type, folderTexts, conversationLogText, input, ngram=4, genLength=100 } = e.data;
 
     if (type==="init"){
         learningText = folderTexts.join("\n");
@@ -218,6 +218,7 @@ onmessage = async function(e){
         postMessage({ type:"result", text: textOut });
     }
 };
+
 
 
 
