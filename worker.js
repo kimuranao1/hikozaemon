@@ -178,13 +178,13 @@ function injectTargets(tokens, targetTokensSet, times=13){
 // -------------------------
 // Web Workerメッセージ処理
 onmessage = async function(e){
-    const { type, folderTexts, conversationLogText, input, ngram=4, genLength=100 } = e.data;
+    const { type, folderTexts, conversationLogText, input, ngram=2, genLength=100 } = e.data;
 
     if (type==="init"){
         learningText = folderTexts.join("\n");
         conversationLog = conversationLogText || "";
         maxTokenLen = 8;
-        ngram_n = ngram || 4;
+        ngram_n = ngram || 2;
         postMessage({ type:"log", msg:`学習テキスト長: ${learningText.length} 文字` });
     }
 
@@ -218,6 +218,7 @@ onmessage = async function(e){
         postMessage({ type:"result", text: textOut });
     }
 };
+
 
 
 
