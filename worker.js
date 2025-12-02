@@ -198,7 +198,7 @@ onmessage = async function(e){
         let tokens = tokenizeJapanese(learningText+"\n"+conversationLog, maxTokenLen);
 
         // ターゲット混ぜ込み
-        tokens = injectTargets(tokens, targetTokens, 100);
+        tokens = injectTargets(tokens, targetTokens, 800);
 
         // 周辺統計
         const { counts, totals } = buildContextCounts(tokens, targetTokens, 50);
@@ -218,6 +218,7 @@ onmessage = async function(e){
         postMessage({ type:"result", text: textOut });
     }
 };
+
 
 
 
