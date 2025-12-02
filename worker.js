@@ -1,12 +1,14 @@
 // ================================
-// 300万文字対応 Web Worker（ターゲット埋め込み + Markov + 文整形 + ストリーミング）
+// 300万文字対応 Web Worker
+// （ターゲットトークン埋め込み + 緩い Markov +
+//   文頭/文末の自然文整形 + ストリーミング）
 // ================================
 
-let learningChunks = [];  // 分割テキスト
+let learningChunks = [];
 let ngram_n = 2;
 
 // -------------------------
-// 汎用トークナイザ（空白・改行・記号を保持）
+// 汎用トークナイザ
 function tokenize_chunk(chunk, maxTokenLen = 10) {
     const pattern = /[\u4E00-\u9FFF]+|[\u3040-\u309F]+|[\u30A0-\u30FF]+|\w+|\s|[^\w\s]/g;
     const tokens = [];
@@ -25,13 +27,13 @@ function tokenize_chunk(chunk, maxTokenLen = 10) {
 }
 
 // -------------------------
-// 入力ワード専用トークナイザ（最大3文字スプリット）
+// 入力をターゲット化（最大3文字）
 function tokenize_input_as_targets(text) {
     return tokenize_chunk(text, 3).filter(t => t !== "");
 }
 
 // -------------------------
-// 周辺文脈統計
+// 周辺統計
 function build_context_counts_multi(tokens, targetSet, N) {
     const counts = new Map();
     const totals = new Map();
@@ -47,11 +49,10 @@ function build_context_counts_multi(tokens, targetSet, N) {
             totals.set(rel, (totals.get(rel) || 0) + 1);
         }
     }
-    return {counts, totals};
+    return { counts, totals };
 }
 
 // -------------------------
-// スコア計算
 function compute_scores(counts, totals, power = 1.0) {
     const scores = new Map();
     for (const [k, cnt] of counts.entries()) {
@@ -65,27 +66,30 @@ function compute_scores(counts, totals, power = 1.0) {
 }
 
 // -------------------------
-// 特徴選択
 function select_features(scores, threshold) {
     const arr = [];
     for (const [k, sc] of scores.entries()) {
         if (sc >= threshold) {
             const parts = k.split('\u0000');
-            arr.push({rel: parseInt(parts[0], 10), token: parts[1], score: sc});
+            arr.push({ rel: parseInt(parts[0], 10), token: parts[1], score: sc });
         }
     }
-    arr.sort((a, b) => (a.rel - b.rel) || (b.score - a.score) || a.token.localeCompare(b.token));
+    arr.sort((a, b) =>
+        (a.rel - b.rel) ||
+        (b.score - a.score) ||
+        a.token.localeCompare(b.token)
+    );
     return arr;
 }
 
 // -------------------------
-// 特徴埋め込み（全ターゲット同一特徴）
+// 埋め込み
 function embed_features_in_corpus(tokens, targetSet, features) {
-    const featTuple = features.map(f => ({rel: f.rel, token: f.token, score: f.score}));
+    const featTuple = features.map(f => ({ rel: f.rel, token: f.token, score: f.score }));
     const out = [];
     for (const tok of tokens) {
         if (targetSet.has(tok)) {
-            out.push({__target:true, text: tok, features: featTuple});
+            out.push({ __target: true, text: tok, features: featTuple });
         } else {
             out.push(tok);
         }
@@ -94,16 +98,14 @@ function embed_features_in_corpus(tokens, targetSet, features) {
 }
 
 // -------------------------
-// Markov 用シリアライズ
 function tokenToKey(t) {
-    if (typeof t === 'string') return JSON.stringify(t);
-    if (typeof t === 'object' && t && t.__target) return JSON.stringify(['TARGET', t.text]);
+    if (typeof t === "string") return JSON.stringify(t);
+    if (typeof t === "object" && t && t.__target) return JSON.stringify(["TARGET", t.text]);
     return JSON.stringify(String(t));
 }
 
 // -------------------------
-// Markov 構築
-function build_markov(tokens, n=2) {
+function build_markov(tokens, n = 2) {
     const trans = new Map();
     for (let i = 0; i < tokens.length - n; i++) {
         const keyArr = tokens.slice(i, i + n).map(tokenToKey);
@@ -115,181 +117,160 @@ function build_markov(tokens, n=2) {
     return trans;
 }
 
-function sampleNext(arr){
-    return arr[Math.floor(Math.random()*arr.length)];
+function sampleNext(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
 }
 
 // -------------------------
-// 自然テキスト化
-function tokenToText(t){
-    if (typeof t === 'string') return t;
-    if (typeof t === 'object' && t && t.__target) return t.text;
+function tokenToText(t) {
+    if (typeof t === "string") return t;
+    if (typeof t === "object" && t && t.__target) return t.text;
     return String(t);
 }
 
-// ========================================================
-// ★★ 文整形モジュール追加（自然な文頭／文末処理）★★
-// ========================================================
+//
+// ================================
+// ▼ 追加：整形ロジック
+// ================================
+//
 
-// 文頭らしい開始キーを選ぶ（句点・改行の直後）
-function pick_sentence_start(keys) {
-    const cands = [];
-    for (const k of keys) {
-        try {
-            const arr = JSON.parse(k);
-            const first = JSON.parse(arr[0]);
-            if (typeof first === "string" && first.match(/^[。！？\n]/)) {
-                cands.push(k);
-            }
-        } catch(e){}
-    }
-    if (cands.length > 0) {
-        return cands[Math.floor(Math.random() * cands.length)];
-    }
-    return keys[Math.floor(Math.random() * keys.length)];
+// 文頭補正：句読点・記号の連続などを除去し、自然な文頭っぽいところから開始
+function fix_start_tokens(tokens) {
+    const textTokens = tokens.map(tokenToText);
+
+    const startIndex = (() => {
+        const re = /[。！？!?…]\s*$/;
+        for (let i = 0; i < textTokens.length - 1; i++) {
+            if (re.test(textTokens[i])) return i + 1;
+        }
+        return 0;
+    })();
+
+    return tokens.slice(startIndex);
 }
 
-// 文頭整形：句読点単体などを削る／文末記号の後から開始
-function clean_stream_start(buffer) {
-    const text = buffer.join("");
+// 文末補正：文末記号が出るまで追加生成
+async function fix_end_tokens(tokens, trans, maxExtend = 100) {
+    const endRe = /[。！？!?…]/;
 
-    // 文末記号の直後から開始（最も自然）
-    const m = text.match(/[。！？]\s*(.*)$/s);
-    if (m && m[1]) {
-        return m[1].split("");
+    const isEnd = () => endRe.test(tokens.map(tokenToText).join(""));
+
+    if (isEnd()) return tokens;
+
+    let seq = tokens.map(tokenToKey);
+    for (let i = 0; i < maxExtend; i++) {
+        if (seq.length < ngram_n) break;
+        const key = JSON.stringify(seq.slice(seq.length - ngram_n));
+        const arr = trans.get(key);
+        if (!arr || arr.length === 0) break;
+
+        const next = sampleNext(arr);
+        tokens.push(next);
+        seq.push(tokenToKey(next));
+
+        if (isEnd()) break;
     }
-
-    // 句読点で始まるなら削除
-    return text.replace(/^[、。！？\s]+/, "").split("");
+    return tokens;
 }
 
-function is_sentence_end(ch) {
-    return /[。！？]/.test(ch);
-}
-
-// ========================================================
-// ★★ ストリーミング生成（文頭整形＋文末延長付き）★★
-// ========================================================
-async function generate_markov_streaming(trans, n, length=200, delay=0) {
-
+// Markov 生成（ストリーミング前に全バッファ生成）
+async function generate_markov_buffer(trans, n, length) {
     const keys = Array.from(trans.keys());
-    if (keys.length === 0) {
-        postMessage({type:"stream_end"});
-        return;
-    }
+    if (keys.length === 0) return [];
 
-    // 文頭らしい開始位置を使う
-    let key = pick_sentence_start(keys);
+    let key = keys[Math.floor(Math.random() * keys.length)];
     let seqKeys = JSON.parse(key);
 
-    let outputBuffer = [];
+    const out = [];
 
-    // 最初の n-gram をバッファへ
+    // initial n grams
     for (const k of seqKeys) {
         try {
             const parsed = JSON.parse(k);
-            if (Array.isArray(parsed) && parsed[0]==='TARGET') {
-                outputBuffer.push(parsed[1]);
-            } else {
-                outputBuffer.push(parsed);
-            }
-        } catch(e){
-            outputBuffer.push(String(k));
+            if (Array.isArray(parsed) && parsed[0] === "TARGET") out.push({ __target: true, text: parsed[1] });
+            else out.push(parsed);
+        } catch {
+            out.push(k);
         }
     }
 
     let seq = seqKeys.slice();
-
-    // 本体生成
-    for (let i=0;i<length-n;i++){
+    for (let i = 0; i < length - n; i++) {
         const arr = trans.get(key);
-        if(!arr || arr.length===0) break;
+        if (!arr || arr.length === 0) break;
 
         const next = sampleNext(arr);
-        outputBuffer.push(tokenToText(next));
+        out.push(next);
 
         seq.push(tokenToKey(next));
         seq = seq.slice(seq.length - n);
         key = JSON.stringify(seq);
     }
 
-    // ★ 文頭整形 ★
-    outputBuffer = clean_stream_start(outputBuffer);
-
-    // ★ 文末まで延長（最大100トークン）★
-    let extra = 0;
-    while (!is_sentence_end(outputBuffer[outputBuffer.length - 1]) && extra < 100) {
-        const arr = trans.get(key);
-        if(!arr || arr.length===0) break;
-
-        const next = sampleNext(arr);
-        outputBuffer.push(tokenToText(next));
-
-        seq.push(tokenToKey(next));
-        seq = seq.slice(seq.length - n);
-        key = JSON.stringify(seq);
-
-        extra++;
-    }
-
-    // ストリーム送信
-    for (const ch of outputBuffer) {
-        postMessage({type:"stream_token", token: ch});
-        if(delay>0) await new Promise(r=>setTimeout(r, delay));
-    }
-
-    postMessage({type:"stream_end"});
+    return out;
 }
 
-// ========================================================
-// Worker メッセージ処理
-// ========================================================
-onmessage = async function(e){
-    const {type, text, input, params} = e.data;
+// 整形後にストリーミング
+async function stream_fixed_tokens(tokens, delay) {
+    for (const t of tokens) {
+        postMessage({ type: "stream_token", token: tokenToText(t) });
+        if (delay > 0) await new Promise(r => setTimeout(r, delay));
+    }
+    postMessage({ type: "stream_end" });
+}
 
-    // 初期化
-    if(type==="init"){
-        learningChunks=[];
+//
+// ================================
+// Worker メッセージ処理
+// ================================
+//
+onmessage = async function (e) {
+    const { type, text, input, params } = e.data;
+
+    if (type === "init") {
+        learningChunks = [];
         const CHUNK_SIZE = (params && params.CHUNK_SIZE) || 80000;
-        for(let i=0;i<text.length;i+=CHUNK_SIZE){
-            learningChunks.push(text.slice(i,i+CHUNK_SIZE));
+        for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+            learningChunks.push(text.slice(i, i + CHUNK_SIZE));
         }
-        postMessage({type:"log", msg:`巨大テキストを ${learningChunks.length} チャンクに分割しました`});
+        postMessage({ type: "log", msg: `${learningChunks.length} チャンクに分割しました` });
     }
 
-    // 生成
-    if(type==="generate"){
-        if(!input||input.trim()==="") return;
+    if (type === "generate") {
+        if (!input || input.trim() === "") return;
 
-        // 1) 入力をターゲット化
         const targetTokensArr = tokenize_input_as_targets(input);
         const targetSet = new Set(targetTokensArr);
 
-        // 2) 全チャンクのトークン化
         let allTokens = [];
-        for(const chunk of learningChunks){
+        for (const chunk of learningChunks) {
             const toks = tokenize_chunk(chunk, 10);
             allTokens.push(...toks);
         }
 
-        // 3) 特徴抽出
         const N = (params && params.N) || 50;
         const power = (params && params.power) || 4.0;
         const threshold = (params && params.threshold) || 1e-7;
+        const gen_length = (params && params.gen_length) || 200;
+        const delay = (params && params.delay) || 0;
 
-        const {counts, totals} = build_context_counts_multi(allTokens, targetSet, N);
+        const { counts, totals } = build_context_counts_multi(allTokens, targetSet, N);
         const scores = compute_scores(counts, totals, power);
         const features = select_features(scores, threshold);
 
-        // 4) 埋め込み
         const tokenized = embed_features_in_corpus(allTokens, targetSet, features);
-
-        // 5) Markov モデル構築
         const model = build_markov(tokenized, ngram_n);
 
-        // 6) ストリーミング生成（文整形つき）
-        const gen_length = (params && params.gen_length) || 200;
-        const delay = (params && params.delay) || 0;
-        generate_markov_streaming(model, ngram_n, gen_length, delay);
+        // 生成（バッファ）
+        let tokens = await generate_markov_buffer(model, ngram_n, gen_length);
+
+        // 文頭補正
+        tokens = fix_start_tokens(tokens);
+
+        // 文末補正
+        tokens = await fix_end_tokens(tokens, model, 100);
+
+        // ストリーミング
+        await stream_fixed_tokens(tokens, delay);
     }
 };
