@@ -1,5 +1,5 @@
 // ================================
-// 300万文字対応 Web Worker（特徴付きMarkov + 文頭/文末補正 + ストリーミング）
+// 300万文字対応 Web Worker（ターゲットトークン埋め込み + 特徴付き Markov + 文頭/文末補正 + ストリーミング）
 // ================================
 
 let learningChunks = [];
@@ -47,7 +47,7 @@ function build_context_counts_multi(tokens, targetSet, N) {
             totals.set(rel, (totals.get(rel) || 0) + 1);
         }
         // フリーズ防止
-        if (idx % 50000 === 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0);
+        if (idx % 50000 === 0) await new Promise(r => setTimeout(r,0));
     }
     return {counts, totals};
 }
@@ -81,7 +81,7 @@ function select_features(scores, threshold) {
 // -------------------------
 function embed_features_in_corpus(tokens, targetSet, features) {
     const featTuple = features.map(f=>({rel:f.rel, token:f.token, score:f.score}));
-    return tokens.map(tok=>targetSet.has(tok)?{__target:true,text:tok,features:featTuple}:tok);
+    return tokens.map(tok => targetSet.has(tok) ? {__target:true, text:tok, features:featTuple} : tok);
 }
 
 // -------------------------
@@ -98,7 +98,7 @@ function build_markov(tokens,n=2){
         const next = tokens[i+n];
         if(!trans.has(key)) trans.set(key,[]);
         trans.get(key).push(next);
-        if(i%50000===0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,0); // フリーズ防止
+        if(i%50000===0) await new Promise(r=>setTimeout(r,0)); // フリーズ防止
     }
     return trans;
 }
@@ -205,18 +205,18 @@ onmessage=async function(e){
         let allTokens=[];
         for(const chunk of learningChunks){
             allTokens.push(...tokenize_chunk(chunk,10));
-            await new Promise(r=>setTimeout(r,0)); // フリーズ防止
+            await new Promise(r=>setTimeout(r,0));
         }
 
         const N=(params&&params.N)||50;
         const power=(params&&params.power)||4.0;
         const threshold=(params&&params.threshold)||1e-7;
-        const {counts,totals}=build_context_counts_multi(allTokens,targetSet,N);
+        const {counts,totals}=await build_context_counts_multi(allTokens,targetSet,N);
         const scores=compute_scores(counts,totals,power);
         const features=select_features(scores,threshold);
 
         const tokenized=embed_features_in_corpus(allTokens,targetSet,features);
-        const model=build_markov(tokenized,ngram_n);
+        const model=await build_markov(tokenized,ngram_n);
 
         let tokens=tokenized.slice(0,Math.min(ngram_n,tokenized.length));
         tokens=fix_start_tokens(tokens);
